@@ -76,3 +76,4 @@ itertools = { workspace = true }
 bytes = { workspace = true }
 derive_more = { workspace = true, features = ["display", "constructor"] }
 prost = { workspace = true }
+futures-util = "0.3.31"
