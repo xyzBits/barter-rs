@@ -1,8 +1,12 @@
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
+use futures_util::future::{join_all, try_join_all};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tokio::{sync::oneshot, task::JoinHandle};
+use std::{borrow::Borrow, collections::HashMap, hash::Hash};
+use tokio::{
+    sync::oneshot,
+    task::{JoinError, JoinHandle},
+};
 
 /// Generic `DataStream`.
 ///
@@ -100,9 +104,9 @@ pub struct Historical {
 
 #[tokio::test]
 async fn run() {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let runtime = tokio::runtime::Runtime::handle();
 
-    let forward = move |item| tx.send(item).map_err(|_| ());
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     let key = "stream-key";
     let stream = futures::stream::pending();
@@ -111,9 +115,21 @@ async fn run() {
         streams: HashMap::from_iter([(key, stream)]),
     };
 
-    let mut streams = streams.forward(forward);
+    let streams = streams
+        .forward(|| {
+            let tx = tx.clone();
+            move |key, item| tx.send(item)
+        })
+        .spawn(runtime);
+
+    // Todo: Let's mirror the SystemBuild style w/ init() & init_with_runtime().
 
     let () = streams.stop_all();
+}
+
+pub struct StreamManager<StreamKey, St> {
+    pub runtime: tokio::runtime::Handle,
+    pub streams: HashMap<StreamKey, St>,
 }
 
 // Start with single stream type, then compose
@@ -129,85 +145,91 @@ impl<StreamKey, St> Default for DataStreams<StreamKey, St> {
     }
 }
 
-impl<StreamKey, St> DataStreams<StreamKey, St>
-where
-    StreamKey: Eq + std::hash::Hash + Send,
-{
+impl<StreamKey, St> DataStreams<StreamKey, St> {
     pub fn new(streams: HashMap<StreamKey, St>) -> Self {
         Self { streams }
     }
 
-    pub fn insert(&mut self, key: StreamKey, stream: St) -> Option<St> {
+    pub fn insert(&mut self, key: StreamKey, stream: St) -> Option<St>
+    where
+        StreamKey: Eq + Hash,
+    {
         self.streams.insert(key, stream)
     }
 
     pub fn remove(&mut self, key: &StreamKey) -> Option<St>
     where
-        StreamKey: std::borrow::Borrow<StreamKey>,
+        StreamKey: Eq + Hash + Borrow<StreamKey>,
     {
         self.streams.remove(key)
     }
 
-    pub fn forward<FnForward>(self, mut forward: FnForward) -> DataStreams<StreamKey, StreamHandle>
-    where
-        St: Stream + Unpin + Send,
-        FnForward: FnMut(St::Item) -> Result<(), ()> + Send + 'static,
-    {
-        let Self { streams } = self;
-
-        let streams = streams
-            .into_iter()
-            .map(|(key, mut stream)| {
-                let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-                let forward_future = stream
-                    .take_until(shutdown_rx)
-                    .map(|item| forward(item))
-                    .take_while(|result: &Result<(), ()>| std::future::ready(result.is_ok()))
-                    .for_each(|result| {
-                        // todo!()
-                        std::future::ready(())
-                    });
-
-                let handle = StreamHandle {
-                    handle: tokio::spawn(forward_future),
-                    shutdown: shutdown_tx,
-                };
-
-                (key, handle)
-            })
-            .collect();
-
-        DataStreams { streams }
-    }
-
-    pub fn forward_async<FnForward>(
+    pub fn forward<FnForward, Err>(
         self,
-        forward: FnForward,
-    ) -> DataStreams<StreamKey, StreamHandle>
+        forward: impl Fn() -> FnForward,
+    ) -> DataStreams<StreamKey, StreamHandle<impl Future>>
     where
-        St: Stream + Unpin + Send,
-        FnForward: AsyncFnMut(St::Item) -> Result<(), ()> + Clone + Send + 'static,
+        StreamKey: Clone + Eq + Hash + Send + 'static,
+        St: Stream + Unpin + Send + 'static,
+        FnForward: FnMut(&StreamKey, St::Item) -> Result<(), Err> + Send + 'static,
+        Err: Send,
     {
         let Self { streams } = self;
 
         let streams = streams
             .into_iter()
-            .map(|(key, mut stream)| {
-                let forward = forward.clone();
+            .map(|(key, stream)| {
+                let stream_key = key.clone();
+                let mut forward = forward();
                 let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
                 let forward_future = stream
                     .take_until(shutdown_rx)
-                    .then(|item| forward(item))
-                    .take_while(|result: &Result<(), ()>| std::future::ready(result.is_ok()))
-                    .for_each(|result| {
-                        // todo!()
-                        std::future::ready(())
-                    });
+                    .map(move |item| forward(&stream_key, item))
+                    .take_while(|result: &Result<(), Err>| std::future::ready(result.is_ok()))
+                    .for_each(|_result| std::future::ready(()));
 
                 let handle = StreamHandle {
-                    handle: tokio::spawn(forward_future),
+                    future: forward_future,
+                    shutdown: shutdown_tx,
+                };
+
+                (key, handle)
+            })
+            .collect();
+
+        DataStreams { streams }
+    }
+
+    pub fn forward_async<FnForward, ForwardFut, Err>(
+        self,
+        forward: impl Fn() -> FnForward,
+    ) -> DataStreams<StreamKey, StreamHandle<impl Future>>
+    where
+        StreamKey: Clone + Eq + Hash + Send + 'static,
+        St: Stream + Unpin + Send + 'static,
+        St::Item: Send,
+        FnForward: FnMut(&StreamKey, St::Item) -> ForwardFut + Send + 'static,
+        ForwardFut: Future<Output = Result<(), Err>> + Send + 'static,
+        Err: Send,
+    {
+        let Self { streams } = self;
+
+        let streams = streams
+            .into_iter()
+            .map(|(key, stream)| {
+                let stream_key = key.clone();
+                let mut forward = forward();
+                let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+                let forward_future = stream
+                    .take_until(shutdown_rx)
+                    .then(move |item| forward(&stream_key, item))
+                    .take_while(|result: &Result<(), Err>| std::future::ready(result.is_ok()))
+                    .for_each(|_result| std::future::ready(()));
+
+                let handle = StreamHandle {
+                    future: forward_future,
                     shutdown: shutdown_tx,
                 };
 
@@ -219,115 +241,76 @@ where
     }
 }
 
-struct StreamHandle {
-    handle: JoinHandle<()>,
-    shutdown: oneshot::Sender<()>,
-}
-
-pub enum DataStreamsError<StreamKey> {
-    StreamNotFound(StreamKey),
-}
-
-impl<StreamKey> DataStreams<StreamKey, StreamHandle> {
-    pub fn stop(&mut self, key: &StreamKey) -> Result<(), DataStreamsError<StreamKey>>
+impl<StreamKey, StreamFuture> DataStreams<StreamKey, StreamHandle<StreamFuture>> {
+    pub fn spawn(
+        self,
+        rt: tokio::runtime::Runtime,
+    ) -> DataStreams<StreamKey, StreamHandle<JoinHandle<()>>>
     where
-        StreamKey: Clone,
+        StreamKey: Eq + Hash,
+        StreamFuture: Future<Output = ()> + Send,
+        StreamFuture::Output: Send,
+    {
+        let streams = self
+            .streams
+            .into_iter()
+            .map(|(key, handle)| {
+                let StreamHandle { future, shutdown } = handle;
+
+                let handle = StreamHandle {
+                    future: rt.spawn(future),
+                    shutdown,
+                };
+
+                (key, handle)
+            })
+            .collect();
+
+        DataStreams { streams }
+    }
+}
+
+impl<StreamKey> DataStreams<StreamKey, StreamHandle<JoinHandle<()>>> {
+    pub fn stop(
+        &mut self,
+        key: &StreamKey,
+    ) -> Result<impl Future<Output = Result<(), JoinError>>, DataStreamsError<StreamKey>>
+    where
+        StreamKey: Clone + Eq + Hash,
     {
         let Some(stream) = self.streams.remove(key) else {
             return Err(DataStreamsError::StreamNotFound(key.clone()));
         };
 
-        let StreamHandle { handle, shutdown } = stream;
+        let StreamHandle { future, shutdown } = stream;
 
         // Send shutdown signal (ignore error if receiver already dropped)
         let _ = shutdown.send(());
 
-        // Abort the spawned task
-        handle.abort();
-
-        Ok(())
+        // Return JoinHandle<()> Future
+        Ok(future)
     }
 
-    pub fn stop_all(mut self) {
-        for (_, stream_handle) in self.streams {
-            // Send shutdown signal
-            let _ = stream_handle.shutdown.send(());
+    pub async fn stop_all(self) -> Result<(), JoinError> {
+        let handles = self
+            .streams
+            .into_values()
+            .map(|StreamHandle { future, shutdown }| {
+                // Send shutdown signal
+                let _ = shutdown.send(());
 
-            // Abort the task
-            stream_handle.handle.abort();
-        }
+                future
+            });
+
+        try_join_all(handles).await.map(|_| ())
     }
 }
 
-// Some abstract to flow through information to outer Stream?
-
-// pub struct DataStreamFlattener;
-//
-// impl<StreamKey> FromIterator<DataStreams> for DataStreamFlattener {
-//
-// }
-
-pub enum UpsertResult<Stream> {
-    Insert,
-    Updated((Option<Stream>)),
+pub struct StreamHandle<Future = JoinHandle<()>> {
+    pub future: Future,
+    pub shutdown: oneshot::Sender<()>,
 }
 
-// Todo: ensure compatible with ReconnectingStreams (maybe layer over DataStream Fn(Args) -> impl Stream
-// impl<StreamKey, Stream> DataStreams<StreamKey, Stream> {
-//     pub async fn upsert<Args>(
-//         &mut self,
-//         keyed_args: impl IntoIterator<Item = Keyed<StreamKey, Args>>,
-//     ) -> Result<Option<Stream>, Stream::Error>
-//     where
-//         Stream: DataStream<Args>,
-//     {
-//         let futures = keyed_args
-//             .into_iter()
-//
-//
-//
-//         let entry = self
-//             .streams
-//             .insert()
-//             .entry(key);
-//
-//         match Stream::init(args).await {
-//             Ok(stream) => stream,
-//             Err() => {}
-//         }
-//
-//         let stream = Stream::init(args).await?;
-//
-//
-//
-//
-//
-//
-//
-//
-//     }
-// }
-//
-// pub struct DataStreamsBuilder<StreamKey, Args> {
-//     pub streams: FnvHashMap<StreamKey, Args>,
-// }
-//
-// impl<StreamKey, Args> DataStreamsBuilder<StreamKey, Args> {
-//     pub fn add(
-//         mut self,
-//         key: StreamKey,
-//         args: Args,
-//     ) -> Self
-//     {
-//         if let Some(replaced) = self.streams.insert(key, args) {
-//             debug!(
-//                 %key,
-//                 old = %replaced,
-//                 new = %args,
-//                 "DataStreamsBuilder replaced StreamKey Args"
-//             );
-//         }
-//
-//         self
-//     }
-// }
+pub enum DataStreamsError<StreamKey> {
+    StreamNotFound(StreamKey),
+}
