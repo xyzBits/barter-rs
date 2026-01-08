@@ -1,6 +1,13 @@
 use derive_more::{Constructor, Display};
 use serde::{Deserialize, Serialize};
 
+/// Java 写法： 你可能直接在代码里传 int exchangeId。
+///
+/// Rust 写法： 把它包在 ExchangeIndex 里。
+///
+/// 为什么要这么做？ 为了防止传参错误。 如果你有一个函数 fn get_fee(exchange: usize, instrument: usize)，
+/// 你很容易搞混两个整数的顺序。 但如果是 fn get_fee(exchange: ExchangeIndex, instrument: InstrumentIndex)，
+/// 如果你传错了，编译器会直接报错。这是零成本的抽象，运行时它就是个纯整数，没有对象开销。
 #[derive(
     Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize, Constructor,
 )]
@@ -66,6 +73,7 @@ pub enum ExchangeId {
     GateioSpot,
     Gemini,
     Hitbtc,
+    // Java 对标： @JsonAlias("huobi")。
     #[serde(alias = "huobi")]
     Htx,
     Kraken,

@@ -69,10 +69,13 @@ where
 /// Instrument Underlying containing a base and quote asset.
 ///
 /// eg/ Underlying { base: "btc", quote: "usdt" }
+/// eg/ Underlying { base: "btc", quote: "usdt" } 这就代表了“用 USDT 去买卖 BTC”这个交易对。
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub struct Underlying<AssetKey> {
-    pub base: AssetKey,
-    pub quote: AssetKey,
+    //Base Asset (基础资产)：你要买卖的东西。例如在 BTC/USDT 中，BTC 是 Base。
+    pub base: AssetKey, // 基础货币，商品
+    // Quote Asset (计价资产)：你用来支付或结算的东西。例如在 BTC/USDT 中，USDT 是 Quote。
+    pub quote: AssetKey, // 计价货币
 }
 
 impl<AssetKey> Underlying<AssetKey> {
@@ -88,6 +91,7 @@ impl<AssetKey> Underlying<AssetKey> {
 }
 
 /// [`Side`] of a trade or position - Buy or Sell.
+/// 含义： 当从 JSON (或其他格式) 反序列化时，只要遇到 "Buy", "buy", "BUY", "b" 中的任何一个，统统自动解析成 Side::Buy 枚举值。
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Deserialize, Serialize)]
 pub enum Side {
     #[serde(alias = "buy", alias = "BUY", alias = "b")]
