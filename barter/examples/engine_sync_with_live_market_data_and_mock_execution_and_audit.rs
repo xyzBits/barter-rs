@@ -1,3 +1,8 @@
+//! # 实时市场数据、模拟执行与审计流示例 (Live Market Data, Mock Execution & Audit)
+//!
+//! 该示例演示了如何整合实时市场数据、模拟执行（Mock Execution）以及启用审计流。
+//! 重点在于如何同步启动系统、通过异步任务消费审计流，以及在系统关闭后生成业绩总结。
+
 use barter::{
     engine::{
         clock::LiveClock,
@@ -33,26 +38,26 @@ const RISK_FREE_RETURN: Decimal = dec!(0.05);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialise Tracing
+    // 1. 初始化日志追踪
     init_logging();
 
-    // Load SystemConfig
+    // 2. 加载系统配置
     let SystemConfig {
         instruments,
         executions,
     } = load_config()?;
 
-    // Construct IndexedInstruments
+    // 3. 构建索引化的交易工具 (IndexedInstruments)
     let instruments = IndexedInstruments::new(instruments);
 
-    // Initialise MarketData Stream
+    // 4. 初始化实时多交易所市场数据流
     let market_stream = init_indexed_multi_exchange_market_stream(
         &instruments,
         &[SubKind::PublicTrades, SubKind::OrderBooksL1],
     )
     .await?;
 
-    // Construct System Args
+    // 5. 构造系统参数 (SystemArgs)
     let args = SystemArgs::new(
         &instruments,
         executions,
@@ -64,27 +69,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         |_| DefaultInstrumentMarketData::default(),
     );
 
-    // Build & run full system:
-    // See SystemBuilder for all configuration options
+    // 6. 使用 SystemBuilder 构建系统：
+    // 关于所有配置选项，详见 SystemBuilder 文档。
     let mut system = SystemBuilder::new(args)
-        // Engine feed in Sync mode (Iterator input)
+        // 引擎驱动模式：同步 Iterator 模式
         .engine_feed_mode(EngineFeedMode::Iterator)
-        // Audit feed is enabled (Engine sends audits)
+        // 启用审计反馈流（引擎将发送审计事件）
         .audit_mode(AuditMode::Enabled)
-        // Engine starts with TradingState::Disabled
+        // 初始交易状态：禁用
         .trading_state(TradingState::Disabled)
-        // Build System, but don't start spawning tasks yet
+        // 构建系统
         .build()?
-        // Init System, spawning component tasks on the current runtime
+        // 初始化系统
         .init_with_runtime(tokio::runtime::Handle::current())
         .await?;
 
-    // Take ownership of the Engine audit snapshot with updates
+    // 7. 获取引擎审计快照及其更新流的所有权
     let audit = system.audit.take().unwrap();
 
-    // Run dummy asynchronous AuditStream consumer
-    // Note: you probably want to use this Stream to replicate EngineState, or persist events, etc.
-    //  --> eg/ see examples/engine_sync_with_audit_replica_engine_state
+    // 8. 启动一个模拟的异步审计流消费者任务
+    // 注意：通常你会使用此流来复现引擎状态、持久化事件等。
+    // 例如：参见 examples/engine_sync_with_audit_replica_engine_state
     let audit_task = tokio::spawn(async move {
         let mut audit_stream = audit.updates.into_stream();
         while let Some(audit) = audit_stream.next().await {
@@ -96,26 +101,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_stream
     });
 
-    // Enable trading
+    // 9. 启用交易
     system.trading_state(TradingState::Enabled);
 
-    // Let the example run for 5 seconds...
+    // 让示例运行 5 秒...
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Before shutting down, CancelOrders and then ClosePositions
+    // 10. 关机前清理：取消订单平掉仓位
     system.cancel_orders(InstrumentFilter::None);
     system.close_positions(InstrumentFilter::None);
 
-    // Shutdown
+    // 11. 系统关机
     let (engine, _shutdown_audit) = system.shutdown().await?;
     let _audit_stream = audit_task.await?;
 
-    // Generate TradingSummary<Daily>
+    // 12. 生成日度交易汇总报告
     let trading_summary = engine
         .trading_summary_generator(RISK_FREE_RETURN)
         .generate(Daily);
 
-    // Print TradingSummary<Daily> to terminal (could save in a file, send somewhere, etc.)
+    // 13. 打印报告
     trading_summary.print_summary();
 
     Ok(())

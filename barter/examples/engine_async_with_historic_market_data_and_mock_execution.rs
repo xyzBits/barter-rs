@@ -1,3 +1,8 @@
+//! # 异步引擎历史数据回测示例 (Async Engine with Historic Data)
+//!
+//! 该示例演示了如何使用 `SystemBuilder` 设置一个异步引擎，并使用由历史市场数据事件组成的异步流进行驱动。
+//! 它涵盖了系统的初始化、异步反馈流的处理、以及如何安全地关闭系统。
+
 use barter::{
     EngineEvent,
     engine::{
@@ -38,23 +43,23 @@ const RISK_FREE_RETURN: Decimal = dec!(0.05);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialise Tracing
+    // 1. 初始化日志追踪
     init_logging();
 
-    // Load SystemConfig
+    // 2. 加载系统配置
     let SystemConfig {
         instruments,
         executions,
     } = load_config()?;
 
-    // Construct IndexedInstruments
+    // 3. 构建索引化的交易工具 (IndexedInstruments)
     let instruments = IndexedInstruments::new(instruments);
 
-    // Initialise HistoricalClock & MarketStream
+    // 4. 初始化历史时钟 (HistoricalClock) 和市场数据流 (MarketStream)
     let (clock, market_stream) =
         init_historic_clock_and_market_stream(FILE_PATH_HISTORIC_MARKET_EVENTS);
 
-    // Construct SystemArgs
+    // 5. 构造系统参数 (SystemArgs)
     let args = SystemArgs::new(
         &instruments,
         executions,
@@ -66,37 +71,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         |_| DefaultInstrumentMarketData::default(),
     );
 
-    // Build & run full system:
-    // See SystemBuilder for all configuration options
+    // 6. 使用 SystemBuilder 构建并运行系统：
+    // 关于所有配置选项，详见 SystemBuilder 文档。
     let system = SystemBuilder::new(args)
-        // Engine feed in Async mode (Stream input)
+        // 引擎驱动模式：异步 Stream 模式
         .engine_feed_mode(EngineFeedMode::Stream)
-        // Audit feed is disabled (Engine does not send audits)
+        // 禁用审计流（引擎不会发送审计事件）
         .audit_mode(AuditMode::Disabled)
-        // Engine starts with TradingState::Enabled
+        // 初始交易状态：启用
         .trading_state(TradingState::Enabled)
-        // Build System, but don't start spawning tasks yet
+        // 构建系统，但尚未生成具体任务
         .build::<EngineEvent, _>()?
-        // Init System, spawning component tasks on the current runtime
+        // 初始化系统，在当前运行时上派生各组件任务
         .init_with_runtime(tokio::runtime::Handle::current())
         .await?;
 
-    // Let the example run for 5 seconds...
+    // 7. 让示例运行 5 秒...
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Before shutting down, CancelOrders and then ClosePositions
+    // 8. 关机前清理：取消所有订单并平掉所有仓位
     system.cancel_orders(InstrumentFilter::None);
     system.close_positions(InstrumentFilter::None);
 
-    // Shutdown
+    // 9. 系统关机
     let (engine, _shutdown_audit) = system.shutdown().await?;
 
-    // Generate TradingSummary<Daily>
+    // 10. 生成日度交易汇总报告 (TradingSummary<Daily>)
     let trading_summary = engine
         .trading_summary_generator(RISK_FREE_RETURN)
         .generate(Daily);
 
-    // Print TradingSummary<Daily> to terminal (could save in a file, send somewhere, etc.)
+    // 11. 打印报告
     trading_summary.print_summary();
 
     Ok(())

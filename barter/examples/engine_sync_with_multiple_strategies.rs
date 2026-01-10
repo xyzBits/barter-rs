@@ -1,3 +1,8 @@
+//! # 多策略运行示例 (Multiple Strategies)
+//!
+//! 该示例演示了如何在一个引擎中同时协调和运行多个交易策略。
+//! 它展示了如何通过自定义 `InstrumentDataState` 来分别为不同策略维护数据和仓位，并展示了如何统一生成各策略的交易指令。
+
 use barter::{
     EngineEvent,
     engine::{
@@ -65,6 +70,7 @@ struct MultiStrategy {
     strategy_b: StrategyB,
 }
 
+// 为多个策略定义的自定义交易工具数据状态
 #[derive(Debug, Clone, Default)]
 struct MultiStrategyCustomInstrumentData {
     market_data: DefaultInstrumentMarketData,
@@ -113,6 +119,7 @@ impl AlgoStrategy for MultiStrategy {
         let cancels_all = cancels_a.into_iter().chain(cancels_b);
         let opens_all = opens_a.into_iter().chain(opens_b);
 
+        // 返回合并后的所有策略指令
         (cancels_all, opens_all)
     }
 }
@@ -139,12 +146,12 @@ impl ClosePositionsStrategy for MultiStrategy {
                 .instruments
                 .instruments(filter)
                 .flat_map(move |state| {
-                    // Only generate orders if we have a market price
+                    // 仅当我们有市场价格时才生成指令
                     let Some(price) = state.data.price() else {
                         return itertools::Either::Left(std::iter::empty());
                     };
 
-                    // Generate a MARKET order to close StrategyA position
+                    // 生成平掉策略 A 仓位的市价单
                     let close_position_a_request = state
                         .data
                         .strategy_a
@@ -161,7 +168,7 @@ impl ClosePositionsStrategy for MultiStrategy {
                             )
                         });
 
-                    // Generate a MARKET order to close StrategyB position
+                    // 生成平掉策略 B 仓位的市价单
                     let close_position_b_request = state
                         .data
                         .strategy_b
@@ -278,6 +285,7 @@ impl Processor<&AccountEvent> for MultiStrategyCustomInstrumentData {
             return;
         };
 
+        // 根据成交所属的策略 ID，更新对应的仓位管理器和摘要生成器
         if trade.strategy == StrategyA::ID {
             self.strategy_a
                 .position
@@ -311,26 +319,26 @@ impl Default for StrategyCustomInstrumentData {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialise Tracing
+    // 1. 初始化日志追踪
     init_logging();
 
-    // Load SystemConfig
+    // 2. 加载系统配置
     let SystemConfig {
         instruments,
         executions,
     } = load_config()?;
 
-    // Construct IndexedInstruments
+    // 3. 构建索引化的交易工具 (IndexedInstruments)
     let instruments = IndexedInstruments::new(instruments);
 
-    // Initialise MarketData Stream
+    // 4. 初始化实时多交易所市场数据流
     let market_stream = init_indexed_multi_exchange_market_stream(
         &instruments,
         &[SubKind::PublicTrades, SubKind::OrderBooksL1],
     )
     .await?;
 
-    // Construct System Args
+    // 5. 构造系统参数 (SystemArgs)
     let args = SystemArgs::new(
         &instruments,
         executions,
@@ -342,27 +350,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         |_| MultiStrategyCustomInstrumentData::init(Utc::now()),
     );
 
-    // Build & run System:
-    // See SystemBuilder for all configuration options
+    // 6. 使用 SystemBuilder 构建并运行系统
     let mut system = SystemBuilder::new(args)
-        // Engine feed in Sync mode (Iterator input)
+        // 引擎驱动模式：同步 Iterator 模式
         .engine_feed_mode(EngineFeedMode::Iterator)
-        // Audit feed is enabled (Engine sends audits)
+        // 启用审计反馈流
         .audit_mode(AuditMode::Enabled)
-        // Engine starts with TradingState::Disabled
+        // 初始交易状态：禁用
         .trading_state(TradingState::Disabled)
-        // Build System, but don't start spawning tasks yet
+        // 构建系统
         .build::<EngineEvent, _>()?
-        // Init System, spawning component tasks on the current runtime
+        // 初始化系统
         .init_with_runtime(tokio::runtime::Handle::current())
         .await?;
 
-    // Take ownership of the Engine audit snapshot with updates
+    // 7. 获取审计摘要及其更新流的所有权
     let audit = system.audit.take().unwrap();
 
-    // Run dummy asynchronous AuditStream consumer
-    // Note: you probably want to use this Stream to replicate EngineState, or persist events, etc.
-    //  --> eg/ see examples/engine_sync_with_audit_replica_engine_state
+    // 8. 运行模拟的异步审计流消费者
     let audit_task = tokio::spawn(async move {
         let mut audit_stream = audit.updates.into_stream();
         while let Some(audit) = audit_stream.next().await {
@@ -374,26 +379,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_stream
     });
 
-    // Enable trading
+    // 9. 启用交易
     system.trading_state(TradingState::Enabled);
 
-    // Let the example run for 5 seconds...
+    // 让示例运行 5 秒...
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    // Before shutting down, CancelOrders and then ClosePositions
+    // 10. 关机前清理：取消订单平掉仓位
     system.cancel_orders(InstrumentFilter::None);
     system.close_positions(InstrumentFilter::None);
 
-    // Shutdown
+    // 11. 系统关机
     let (engine, _shutdown_audit) = system.shutdown().await?;
     let _audit_stream = audit_task.await?;
 
-    // Generate TradingSummary<Daily>
+    // 12. 生成日度交易汇总报告
     let trading_summary = engine
         .trading_summary_generator(RISK_FREE_RETURN)
         .generate(Daily);
 
-    // Print TradingSummary<Daily> to terminal (could save in a file, send somewhere, etc.)
+    // 13. 打印报告
     trading_summary.print_summary();
 
     Ok(())

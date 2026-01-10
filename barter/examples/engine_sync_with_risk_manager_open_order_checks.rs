@@ -1,4 +1,10 @@
+//! # 带有风险管理开仓检查的引擎运行示例 (Risk Manager Checks)
+//!
+//! 该示例演示了如何通过实现自定义的 `RiskManager` 轨迹（Trait）来为引擎增加开仓前的风险检查逻辑。
+//! 涵盖了名义价值检查、市价单偏离度检查等常见的风控场景。
+
 use barter::{
+ Sands 
     EngineEvent,
     engine::{
         clock::LiveClock,

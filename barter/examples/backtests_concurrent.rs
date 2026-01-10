@@ -1,3 +1,8 @@
+//! # 并行回测示例 (Concurrent Backtests)
+//!
+//! 该示例演示了如何使用 `run_backtests` 函数高效地并行运行大规模回测。
+//! 通过将回测参数拆分为常量部分和动态部分，可以在利用多核性能的同时，灵活地进行参数搜索（如策略优化）。
+
 use barter::{
     backtest::{
         BacktestArgsConstant, BacktestArgsDynamic,
@@ -37,9 +42,10 @@ pub struct Config {
 
 #[tokio::main]
 async fn main() {
-    // Initialise Tracing
+    // 1. 初始化日志追踪
     barter::logging::init_logging();
 
+    // 2. 加载配置
     let Config {
         risk_free_return,
         system: SystemConfig {
@@ -48,15 +54,15 @@ async fn main() {
         },
     } = load_config();
 
-    // Construct IndexedInstruments
+    // 3. 构建索引化的交易工具 (IndexedInstruments)
     let instruments = IndexedInstruments::new(instruments);
 
-    // Initialise MarketData
+    // 4. 初始化市场数据
     let market_events = market_data_from_file(FILE_PATH_MARKET_DATA_INDEXED);
     let market_data = MarketDataInMemory::new(Arc::new(market_events));
     let time_engine_start = market_data.time_first_event().await.unwrap();
 
-    // Construct EngineState
+    // 5. 构建引擎状态 (EngineState)
     let engine_state = EngineStateBuilder::new(&instruments, DefaultGlobalData::default(), |_| {
         DefaultInstrumentMarketData::default()
     })
@@ -64,7 +70,8 @@ async fn main() {
     .trading_state(TradingState::Enabled)
     .build();
 
-    // Construct constant backtest arguments
+    // 6. 构造常量回测参数 (BacktestArgsConstant)
+    // 这些参数在所有并行回测任务中是共用的。
     let args_constant = Arc::new(BacktestArgsConstant {
         instruments,
         executions,
@@ -73,7 +80,7 @@ async fn main() {
         engine_state,
     });
 
-    // Define dummy dynamic backtest arguments
+    // 7. 定义动态回测参数模板 (BacktestArgsDynamic)
     let dynamic_arg = BacktestArgsDynamic {
         id: SmolStr::default(),
         risk_free_return,
@@ -81,22 +88,23 @@ async fn main() {
         risk: DefaultRiskManager::<EngineState<DefaultGlobalData, DefaultInstrumentMarketData>>::default(),
     };
 
-    // Generate dummy iterator of cloned dynamic arguments
-    // Note that concurrent backtests should be run with different BacktestArgsDynamic!
+    // 8. 生成动态参数迭代器
+    // 注意：并行回测应使用不同的 BacktestArgsDynamic（如不同的策略参数或 ID）！
     let args_dynamic_iter = (0..NUM_BACKTESTS).map(|index| {
         let mut dynamic_args = dynamic_arg.clone();
         dynamic_args.id = index.to_smolstr();
         dynamic_args
     });
 
+    // 9. 执行并行回测
     let mut summary = run_backtests(args_constant, args_dynamic_iter)
         .await
         .unwrap();
 
-    // Analyse backtest summaries...
-    println!("\nNum Backtests: {}", summary.num_backtests);
-    println!("Duration: {:?}", summary.duration);
-    // For example, find the backtest with the highest cumulative PnL
+    // 10. 分析回测汇总结果...
+    println!("\n回测数量: {}", summary.num_backtests);
+    println!("耗时: {:?}", summary.duration);
+    // 例如：找出累计盈亏最高的测试结果。
     summary.summaries.sort_by(|a, b| {
         let backtest_a_total_pnl = a
             .trading_summary
@@ -116,7 +124,7 @@ async fn main() {
     let best_cumulative_sharpe = summary.summaries.first().unwrap();
 
     println!(
-        "\nBest Cumulative Sharpe: BacktestId = {}",
+        "\n最佳累计收益结果: BacktestId = {}",
         best_cumulative_sharpe.id
     );
     best_cumulative_sharpe.trading_summary.print_summary()

@@ -1,3 +1,8 @@
+//! # 交易业绩统计示例 (Statistical Trading Summary)
+//!
+//! 该示例演示了如何使用 `TradingSummaryGenerator` 为多个交易工具和资产生成详细的业绩报告。
+//! 涵盖了从初始化状态到处理模拟事件并打印摘要的完整流程。
+
 use barter::{
     engine::state::{
         EngineState, global::DefaultGlobalData, instrument::data::DefaultInstrumentMarketData,
@@ -45,12 +50,14 @@ pub enum ContrivedEvents {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate IndexedInstruments
+    // 1. 生成索引化的交易工具 (IndexedInstruments)
     let instruments = indexed_instruments();
 
     // Set initial timestamp to seed Instrument TearSheets
+    // 2. 设置初始时间戳，用于初始化各交易工具的 TearSheet
     let time_now = Utc::now();
 
-    // Construct EngineState from IndexedInstruments and hard-coded exchange asset Balances
+    // 3. 基于索引化的交易工具和硬编码的交易所资产余额构造引擎状态 (EngineState)
     let state = EngineState::builder(&instruments, DefaultGlobalData::default(), |_| {
         DefaultInstrumentMarketData::default()
     })
@@ -65,9 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Note: can add other initial data via this builder (eg/ exchange asset balances)
     .build();
 
-    // Initialise TradingSummaryGenerator for all indexed instruments & assets
-    // Note: EngineState already contains Instrument & Asset TearSheets
-    //  --> this is just an example of using a TradingSummaryGenerator directly
+    // 4. 为所有交易工具和资产初始化 TradingSummaryGenerator
+    // 注意：EngineState 内部已经包含了 Instrument 和 Asset 的 TearSheet
+    // 此处仅作为直接使用 TradingSummaryGenerator 的示例。
     let mut summary_generator = TradingSummaryGenerator::init(
         RISK_FREE_RETURN,
         time_now, // time_engine_start
@@ -77,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &state.assets,
     );
 
-    // Update TradingSummaryGenerator with some synthetic Balance & PositionExited events
+    // 5. 使用一些合成的余额 (Balance) 和仓位平仓 (PositionExited) 事件更新摘要生成器
     for update in generate_synthetic_updates(time_now) {
         match update {
             ContrivedEvents::Balance(balance) => {
@@ -89,9 +96,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Generate crypto-centric (24/7 trading) annualised TradingSummary
+    // 6. 生成基于加密货币（24/7 交易）的年化交易汇总报告
     let summary = summary_generator.generate(Annual365);
 
+    // 7. 打印报告
     summary.print_summary();
 
     Ok(())

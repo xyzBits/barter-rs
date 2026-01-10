@@ -1,5 +1,5 @@
-/// Grouping of [Welford Online](https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm)
-/// algorithms for calculating running values such as mean and variance in one pass through.
+/// [Welford 联机算法](https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm) 的实现。
+/// 该算法能够在一次遍历中高效地计算出移动平均值和方差。
 pub mod welford_online {
     use rust_decimal::Decimal;
 
