@@ -1,8 +1,12 @@
+# [package] 部分定义了 crate 的元数据，这是 Rust 项目的标准配置
 [package]
+# 库的名称，专注于交易工具和资产的数据结构
 name = "barter-instrument"
 version = "0.3.1"
+# 使用 Rust 2024 edition，利用最新的语言特性，如更简洁的异步支持等
 edition = "2024"
 authors = ["JustAStream <justastream.code@gmail.com>"]
+# 许可证：选择宽松的 MIT 协议便于广泛集成和分发
 license = "MIT"
 documentation = "https://docs.rs/barter-instrument"
 repository = "https://github.com/barter-rs/barter-rs"
@@ -11,19 +15,30 @@ description = "Core Barter Exchange, Instrument and Asset data structures and as
 keywords = ["trading", "backtesting", "crypto", "stocks", "investment"]
 categories = ["accessibility", "simulation"]
 
+# [dev-dependencies] 仅在开发和测试时使用的依赖
 [dev-dependencies]
+# 金融计算需要极致的精度。使用宏库允许开发者以直观的方式定义小数
 rust_decimal_macros = { workspace = true }
+# 在测试中用于校验 JSON 格式，负责 Rust 结构体和交易所 API 规范的相互转换
 serde_json = { workspace = true }
 
+# [dependencies] 运行库所需的生产环境依赖
 [dependencies]
-# SerDe
+# SerDe (Serializer/Deserializer): Rust 序列化标准
+# 启用 derive 特性是为了让我们的结构体通过简单的 #[derive(...)] 就能具备转换能力
 serde = { workspace = true, features = ["derive"] }
 
-# Data Structures
-smol_str = { workspace = true, features = ["serde"]}
+# smol_str: 专门针对短字符串（如币种符号 "BTC"）优化的库。
+# 它在栈上分配空间，减少堆分配，提升高频交易处理速度
+smol_str = { workspace = true, features = ["serde"] }
+# rust_decimal: 提供高精度定点小数。
+# 必须使用它而不是 f64（浮点数），以避免浮点数在金额计算中产生的微小误差
 rust_decimal = { workspace = true }
 
-# Misc
+# chrono: 业界标准的时间日期处理库，带有 serde 特性方便解析时间戳
 chrono = { workspace = true, features = ["serde"] }
+# derive_more: 极大地减少了 Rust 中的样板代码
+# 这里启用 display 特性，可以将枚举变体（如 Side::Buy）直接以字符串打印
 derive_more = { workspace = true, features = ["display"] }
+# thiserror: 用于定义自定义错误类型，自动生成错误信息的展示逻辑
 thiserror = { workspace = true }

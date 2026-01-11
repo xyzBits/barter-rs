@@ -4,17 +4,17 @@ use serde::Serialize;
 use smol_str::{SmolStr, StrExt, format_smolstr};
 use std::borrow::Borrow;
 
-/// Barter lowercase `SmolStr` representation for an [`Instrument`](super::Instrument) - unique
-/// across all exchanges.
-///
-/// Note: Binance btc_usdt spot is not considered the same instrument as Bitfinex btc_usdt spot.
+/// Barter 系统内部使用的交易工具名称（小写）。
+/// 在整个系统中，即使交易所、基础资产、计价资产都相同，通常也会加上交易所前缀以确保全局唯一性。
+/// 示例：`InstrumentNameInternal("binance_spot-btc_usdt")`
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Display)]
 pub struct InstrumentNameInternal(pub SmolStr);
-
 impl InstrumentNameInternal {
-    /// Construct a new lowercase [`Self`] from the provided `Into<SmolStr>`.
-    ///
-    /// Should be unique across exchanges.
+    /// 从任何可转换为 `SmolStr` 的类型（如 `&str`, `String`）创建一个新的小写名称。
+    /// ### 泛型参数：
+    /// * `S`: 输入名称类型。
+    /// ### 示例：
+    /// `InstrumentNameInternal::new("Binance_Spot-BTC_USDT")` -> 存储为 "binance_spot-btc_usdt"。
     pub fn new<S>(name: S) -> Self
     where
         S: Into<SmolStr>,
@@ -27,10 +27,11 @@ impl InstrumentNameInternal {
         }
     }
 
-    /// Construct a new lowercase [`Self`], combining the [`ExchangeId`] and
-    /// base and quote [`AssetNameExchange`]s.
-    ///
-    /// Generates an internal instrument identifier unique across exchanges.
+    /// 根据交易所 ID、基础资产和计价资产的官方名称构造一个内部唯一的标识符。
+    /// ### 参数：
+    /// * `exchange`: 交易所 ID。
+    /// * `base`: 基础资产的官方名称（如 "BTC"）。
+    /// * `quote`: 计价资产的官方名称（如 "USDT"）。
     pub fn new_from_exchange_underlying<Ass>(exchange: ExchangeId, base: &Ass, quote: &Ass) -> Self
     where
         for<'a> &'a Ass: Into<&'a AssetNameExchange>,
@@ -92,21 +93,23 @@ impl AsRef<str> for InstrumentNameInternal {
 }
 
 impl<'de> serde::de::Deserialize<'de> for InstrumentNameInternal {
+    /// `'de` 是反序列化生命周期，表示输入数据的存续期。
+    /// ### 泛型参数：
+    /// * `D`: 反序列化器（如 JSON 解释器）。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::de::Deserializer<'de>,
     {
+        // Cow 表示 "Copy on Write"。它允许我们在不需要修改数据时引用原始 JSON 字符串，
+        // 从而减少不必要的内存拷贝，提高性能。
         let name = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
         Ok(InstrumentNameInternal::new(name))
     }
 }
 
-/// Exchange `SmolStr` representation for an [`Instrument`](super::Instrument) - most likely not
-/// unique across all exchanges.
-///
-/// For example: `InstrumentNameExchange("XBT-USDT")`, which is distinct from the internal
-/// representation of the instrument, such as `InstrumentIndex(1)` or
-/// `InstrumentNameInternal("btc_usdt"`.
+/// 交易所官方使用的产品标识符。
+/// ### 示例：
+/// `InstrumentNameExchange("XBTUSDT")` (Binance) 或 `InstrumentNameExchange("tBTCUSD")` (Bitfinex)。
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Display)]
 pub struct InstrumentNameExchange(SmolStr);
 

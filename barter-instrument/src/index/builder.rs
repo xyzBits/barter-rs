@@ -8,10 +8,16 @@ use crate::{
     instrument::{Instrument, InstrumentIndex, spec::OrderQuantityUnits},
 };
 
+/// 用于增量构建 `IndexedInstruments` 的构建器。
+/// 在交易系统中，我们通常先收集所有的交易工具（Instrument），
+/// 然后再统一进行去重、排序，并生成连续的内存索引（Index）。
 #[derive(Debug, Default)]
 pub struct IndexedInstrumentsBuilder {
+    /// 暂存所有涉及的交易所 ID。
     exchanges: Vec<ExchangeId>,
+    /// 暂存所有原始交易工具数据。
     instruments: Vec<Instrument<ExchangeId, Asset>>,
+    /// 暂存所有涉及的交易所资产。
     assets: Vec<ExchangeAsset<Asset>>,
 }
 
@@ -20,23 +26,26 @@ impl IndexedInstrumentsBuilder {
         Self::default()
     }
 
+    /// 向构建器中添加一个新的交易工具。
+    /// ### 参数：
+    /// * `instrument`: 原始交易工具数据（使用 `ExchangeId` 和 `Asset` 标识）。
     pub fn add_instrument(mut self, instrument: Instrument<ExchangeId, Asset>) -> Self {
-        // Add ExchangeId
+        // 记录关联的交易所
         self.exchanges.push(instrument.exchange);
 
-        // Add Underlying base
+        // 记录关联的基础资产 (Base Asset)
         self.assets.push(ExchangeAsset::new(
             instrument.exchange,
             instrument.underlying.base.clone(),
         ));
 
-        // Add Underlying quote
+        // 记录关联的计价资产 (Quote Asset)
         self.assets.push(ExchangeAsset::new(
             instrument.exchange,
             instrument.underlying.quote.clone(),
         ));
 
-        // If Perpetual, Future, or Option, add settlement asset
+        // 如果是永续合约等复杂品种，还需记录结算资产 (Settlement Asset)
         if let Some(settlement_asset) = instrument.kind.settlement_asset() {
             self.assets.push(ExchangeAsset::new(
                 instrument.exchange,
@@ -44,8 +53,7 @@ impl IndexedInstrumentsBuilder {
             ));
         }
 
-        // Add Instrument OrderQuantityUnits if it's defined in asset units
-        // --> likely a duplicate asset, but if so will be filtered during Self::build()
+        // 处理特定的下单规则资产（例如某些交易所要求以特定资产计价）
         if let Some(spec) = instrument.spec.as_ref()
             && let OrderQuantityUnits::Asset(asset) = &spec.quantity.unit
         {
@@ -53,14 +61,15 @@ impl IndexedInstrumentsBuilder {
                 .push(ExchangeAsset::new(instrument.exchange, asset.clone()));
         }
 
-        // Add Instrument
+        // 暂存交易工具本身
         self.instruments.push(instrument);
 
         self
     }
 
+    /// 执行构建逻辑：去重、排序，并将原始标识符转换为内存索引。
     pub fn build(mut self) -> IndexedInstruments {
-        // Sort & dedup
+        // 1. 去重与排序：确保相同的数据只占用一个索引位，且顺序稳定
         self.exchanges.sort();
         self.exchanges.dedup();
         self.instruments.sort();
@@ -68,7 +77,7 @@ impl IndexedInstrumentsBuilder {
         self.assets.sort();
         self.assets.dedup();
 
-        // Index Exchanges
+        // 2. 交易所索引化：为每个 ExchangeId 分配 ExchangeIndex
         let exchanges = self
             .exchanges
             .into_iter()
@@ -76,7 +85,7 @@ impl IndexedInstrumentsBuilder {
             .map(|(index, exchange)| Keyed::new(ExchangeIndex::new(index), exchange))
             .collect::<Vec<_>>();
 
-        // Index Assets
+        // 3. 资产索引化：为每个交易所资产分配 AssetIndex
         let assets = self
             .assets
             .into_iter()
@@ -84,7 +93,7 @@ impl IndexedInstrumentsBuilder {
             .map(|(index, exchange_asset)| Keyed::new(AssetIndex::new(index), exchange_asset))
             .collect::<Vec<_>>();
 
-        // Index Instruments (also maps any Instrument AssetKeys -> AssetIndex)
+        // 4. 交易工具索引化：将 Instrument 内部的 ExchangeId/Asset 映射为对应的 Index
         let instruments = self
             .instruments
             .into_iter()

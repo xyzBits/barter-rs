@@ -42,7 +42,6 @@ pub mod gateio;
 /// `Kraken` [`Connector`] and [`StreamSelector`] implementations.
 pub mod kraken;
 
-
 // OKX 的连接器实现。
 /// `Okx` [`Connector`] and [`StreamSelector`] implementations.
 pub mod okx;
@@ -88,7 +87,6 @@ where
 /// ### Notes
 /// This must be implemented for a new exchange integration!
 pub trait Connector
-
 where
     Self: Clone + Default + Debug + for<'de> Deserialize<'de> + Serialize + Sized,
 {

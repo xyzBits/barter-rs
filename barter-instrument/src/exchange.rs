@@ -1,13 +1,12 @@
 use derive_more::{Constructor, Display};
 use serde::{Deserialize, Serialize};
 
-/// Java 写法： 你可能直接在代码里传 int exchangeId。
-///
-/// Rust 写法： 把它包在 ExchangeIndex 里。
-///
-/// 为什么要这么做？ 为了防止传参错误。 如果你有一个函数 fn get_fee(exchange: usize, instrument: usize)，
-/// 你很容易搞混两个整数的顺序。 但如果是 fn get_fee(exchange: ExchangeIndex, instrument: InstrumentIndex)，
-/// 如果你传错了，编译器会直接报错。这是零成本的抽象，运行时它就是个纯整数，没有对象开销。
+/// 交易所索引，是对 `usize` 的封装。
+/// ### 为什么要这么做？
+/// 1. **类型安全**：防止将一个普通的整数（如 `instrument_index`）误传给需要 `exchange_index` 的函数。
+///    例如：`fn get_fee(exchange: ExchangeIndex, instrument: InstrumentIndex)` 即使底层都是 `usize`，
+///    传错顺序编译器也会提示错误。
+/// 2. **零成本抽象**：它是 Rust 的 Newtype 模式，在运行时它就是个纯 `usize`，没有任何对象分配开销。
 #[derive(
     Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize, Constructor,
 )]
@@ -20,19 +19,19 @@ impl ExchangeIndex {
 }
 
 impl std::fmt::Display for ExchangeIndex {
+    /// `Formatter<'_>` 中的 `'_` 是匿名生命周期。
+    /// 它表示 Formatter 的生命周期与 fmt 函数调用的生命周期绑定，开发者无需显式命名。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ExchangeIndex({})", self.0)
     }
 }
 
-/// Unique identifier for an execution server.
-///
-/// ### Notes
-/// An execution may have a distinct server for different
-/// [`InstrumentKinds`](super::instrument::kind::InstrumentKind).
-///
-/// For example, BinanceSpot and BinanceFuturesUsd have distinct APIs, and are therefore
-/// represented as unique variants.
+/// 交易所的唯一标识符枚举。
+/// ### 示例：
+/// `ExchangeId::BinanceSpot`, `ExchangeId::Okx`
+/// ### derive 说明：
+/// * `Display`: 来自 `derive_more` 插件，自动将枚举名转换为字符串（如 "BinanceSpot"）。
+/// * `snake_case`: 在序列化为 JSON 时，会将 `BinanceSpot` 转换为 `binance_spot`。
 #[derive(
     Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize, Display,
 )]
@@ -73,7 +72,7 @@ pub enum ExchangeId {
     GateioSpot,
     Gemini,
     Hitbtc,
-    // Java 对标： @JsonAlias("huobi")。
+    // 即使是老牌交易所火币 (Huobi) 更名为 HTX，这里也通过 alias 兼容了 "huobi" 的写法。
     #[serde(alias = "huobi")]
     Htx,
     Kraken,
@@ -85,7 +84,8 @@ pub enum ExchangeId {
 }
 
 impl ExchangeId {
-    /// Return the &str representation of this [`ExchangeId`]
+    /// 返回交易所 ID 的字符串表示形式。
+    /// 返回的是 `'static str`，因为它指向程序的只读存储区，在整个程序生命周期内都有效。
     pub fn as_str(&self) -> &'static str {
         match self {
             ExchangeId::Other => "other",
@@ -123,7 +123,7 @@ impl ExchangeId {
             ExchangeId::GateioSpot => "gateio_spot",
             ExchangeId::Gemini => "gemini",
             ExchangeId::Hitbtc => "hitbtc",
-            ExchangeId::Htx => "htx", // huobi alias
+            ExchangeId::Htx => "htx", // 这里 HTX 是火币的新名字
             ExchangeId::Kraken => "kraken",
             ExchangeId::Kucoin => "kucoin",
             ExchangeId::Liquid => "liquid",
@@ -140,10 +140,12 @@ mod tests {
 
     #[test]
     fn test_de_exchange_id() {
+        // 验证 "htx" 能正确反序列化
         assert_eq!(
             serde_json::from_str::<ExchangeId>(r#""htx""#).unwrap(),
             ExchangeId::Htx
         );
+        // 验证别名 "huobi" 也能正确反序列化为 Htx 变体
         assert_eq!(
             serde_json::from_str::<ExchangeId>(r#""huobi""#).unwrap(),
             ExchangeId::Htx

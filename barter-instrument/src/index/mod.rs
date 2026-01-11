@@ -12,24 +12,16 @@ pub mod builder;
 /// Contains error variants that can occur when working with an [`IndexedInstruments`] collection.
 pub mod error;
 
-/// Indexed collection of exchanges, assets, and instruments.
-///
-/// Initialise incrementally via the [`IndexedInstrumentsBuilder`], or all at once via the
-/// constructor.
-///
-/// The indexed collection is useful for creating efficient O(1) constant lookup state management
-/// systems where the state is keyed on an instrument, asset, or exchange.
-///
-/// For example uses cases, see the central `barter` crate `EngineState` design.
-///
-/// # Index Relationships
-/// - `ExchangeIndex`: Unique index for each [`ExchangeId`] added during initialisation.
-/// - `InstrumentIndex`: Unique identifier for each [`Instrument`] added during initialisation.
-/// - `AssetIndex`: Unique identifier for each [`ExchangeAsset`] added during initialisation.
+/// 一个经过索引处理的交易所、资产和交易工具的集合。
+/// 这种设计允许我们在内存中以 O(1) 的复杂度快速查找任何产品。
 #[derive(Debug, Clone, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub struct IndexedInstruments {
+    /// 包含所有在该集合中出现的交易所及其唯一索引。
     exchanges: Vec<Keyed<ExchangeIndex, ExchangeId>>,
+    /// 包含所有涉及的交易所资产（如 Binance-BTC）及其索引。
     assets: Vec<Keyed<AssetIndex, ExchangeAsset<Asset>>>,
+    /// 核心交易工具的索引列表。注意这里的 Instrument 是完全索引化的：
+    /// 它不直接存储资产名，而是存储 `AssetIndex`，极大地减小了内存占用。
     instruments:
         Vec<Keyed<InstrumentIndex, Instrument<Keyed<ExchangeIndex, ExchangeId>, AssetIndex>>>,
 }
@@ -44,6 +36,12 @@ impl IndexedInstruments {
     /// could invalidate existing index lookup tables).
     ///
     /// For incremental initialisation, see the [`IndexedInstrumentsBuilder`].
+    /// 从能够转换为 `Instrument` 的迭代器构造一个索引化的集合。
+    /// ### 泛型参数：
+    /// * `Iter`: 迭代器类型。
+    /// * `I`: 可以转换为 `Instrument<ExchangeId, Asset>` 的类型。
+    /// ### 示例：
+    /// `let indexed = IndexedInstruments::new(vec![btc_usdt_spot, eth_usdt_spot]);`
     pub fn new<Iter, I>(instruments: Iter) -> Self
     where
         Iter: IntoIterator<Item = I>,
@@ -80,14 +78,9 @@ impl IndexedInstruments {
         &self.instruments
     }
 
-    /// Finds the [`ExchangeIndex`] associated with the provided [`ExchangeId`].
-    ///
-    /// # Arguments
-    /// * `exchange` - The exchange ID to look up
-    ///
-    /// # Returns
-    /// * `Ok(ExchangeIndex)` - exchange found.
-    /// * `Err(IndexError)` - exchange not found.
+    /// 根据交易所标识符查找其对应的唯一索引。
+    /// ### 参数：
+    /// * `exchange`: 需要查询的交易所（如 `ExchangeId::BinanceSpot`）。
     pub fn find_exchange_index(&self, exchange: ExchangeId) -> Result<ExchangeIndex, IndexError> {
         find_exchange_by_exchange_id(&self.exchanges, &exchange)
     }
@@ -102,15 +95,10 @@ impl IndexedInstruments {
             )))
     }
 
-    /// Finds the [`AssetIndex`] associated with the provided `ExchangeId` and `AssetNameInterval`.
-    ///
-    /// # Arguments
-    /// * `exchange` - The `ExchangeId` associated with the asset.
-    /// * `name` - The `AssetNameInternal` associated with the asset (eg/ "btc", "usdt", etc).
-    ///
-    /// # Returns
-    /// * `Ok(AssetIndex)` - exchange asset found.
-    /// * `Err(IndexError)` - exchange asset not found.
+    /// 根据交易所和内部资产名称查找其对应的唯一索引。
+    /// ### 参数：
+    /// * `exchange`: 交易所 ID。
+    /// * `name`: 资产名称（如 "btc"）。
     pub fn find_asset_index(
         &self,
         exchange: ExchangeId,
@@ -227,21 +215,21 @@ mod tests {
 
     #[test]
     fn test_indexed_instruments_new() {
-        // Test creating empty IndexedInstruments
+        // 测试创建空的 IndexedInstruments
         let empty = IndexedInstruments::new(std::iter::empty::<Instrument<ExchangeId, Asset>>());
         assert!(empty.exchanges().is_empty());
         assert!(empty.assets().is_empty());
         assert!(empty.instruments().is_empty());
 
-        // Test creating with single instrument
+        // 测试使用单个交易工具创建
         let instrument = instrument(ExchangeId::BinanceSpot, "btc", "usdt");
         let actual = IndexedInstruments::new(std::iter::once(instrument));
 
         assert_eq!(actual.exchanges().len(), 1);
-        assert_eq!(actual.assets().len(), 2); // BTC and USDT
+        assert_eq!(actual.assets().len(), 2); // 包含 BTC 和 USDT 两个资产
         assert_eq!(actual.instruments().len(), 1);
 
-        // Verify exchanges indexes
+        // 验证交易所索引
         assert_eq!(actual.exchanges()[0].value, ExchangeId::BinanceSpot);
 
         // Verify asset indexes
@@ -282,12 +270,13 @@ mod tests {
 
         let indexed = IndexedInstruments::new(instruments);
 
-        // Should have 2 exchanges, 4 assets (BTC, ETH, USDT, USD), and 3 instruments
+        // 应该有 2 个交易所，5 个资产（币安的 BTC, ETH, USDT，以及 Coinbase 的 BTC, USD），以及 3 个交易工具
+        // 注意：同一资产在不同交易所被视为不同的实体 (ExchangeAsset)
         assert_eq!(indexed.exchanges().len(), 2);
         assert_eq!(indexed.assets().len(), 5);
         assert_eq!(indexed.instruments().len(), 3);
 
-        // Verify exchanges
+        // 验证交易所是否包含在内
         let exchanges: Vec<_> = indexed.exchanges().iter().map(|e| e.value).collect();
         assert!(exchanges.contains(&ExchangeId::BinanceSpot));
         assert!(exchanges.contains(&ExchangeId::Coinbase));

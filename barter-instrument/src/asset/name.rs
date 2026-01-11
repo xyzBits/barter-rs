@@ -9,25 +9,26 @@ use std::borrow::Borrow;
 /// This may or may not be different from an execution's representation.
 ///
 /// For example, some exchanges may refer to "btc" as "xbt".
-/// molStr (神奇之处)：
-///
-/// 它是一个栈上优先的字符串。
-///
-/// 如果字符串长度不超过 23 字节（绝大多数加密货币代码如 "BTC", "ETH-USDT" 都很短），它直接存放在结构体内部（Inline），完全没有堆内存分配。
-///
-/// 它的性能接近于 C 语言的 char[23] 数组。
+/// Barter 内部统一使用的资产名称标识（小写）。
+/// ### `SmolStr` 的优势：
+/// 在金融系统中需要处理海量的币种符号。`SmolStr` 会在栈上为长度不超过 23 字节的短字符串（如 "BTC"）分配空间。
+/// 这样可以完全避免堆内存分配，极大地降低垃圾回收压力（如果是在 JVM 中）或内存分配器开销，提升处理速度。
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Display)]
 pub struct AssetNameInternal(SmolStr);
 
 impl AssetNameInternal {
-    /// Construct a new lowercase [`Self`] from the provided `Into<SmolStr>`.
+    /// 从能够转换为 `SmolStr` 的类型（如 `&str`, `String`）创建一个新的小写名称。
+    /// ### 泛型参数：
+    /// * `S`: 输入字符串的类型。
+    /// ### 示例：
+    /// `AssetNameInternal::new("BTC")` -> 将存储为 "btc"。
     pub fn new<S>(name: S) -> Self
     where
         S: Into<SmolStr>,
     {
         let name = name.into();
 
-        //判断字符串 name 中的每一个字符是否都是小写字母
+        // 性能优化：如果已经是小写，则直接构造；否则进行小写转换。
         if name.chars().all(char::is_lowercase) {
             Self(name)
         } else {
@@ -59,6 +60,9 @@ impl From<String> for AssetNameInternal {
     }
 }
 
+/// 允许 `AssetNameInternal` 表现得像一个 `str`。
+/// 这在将 `AssetNameInternal` 作为 `HashMap` 的键时非常有用，
+/// 允许我们直接用 `map.get("btc")` 而不是 `map.get(&AssetNameInternal::new("btc"))` 来查表。
 impl Borrow<str> for AssetNameInternal {
     fn borrow(&self) -> &str {
         self.0.borrow()
@@ -72,11 +76,14 @@ impl AsRef<str> for AssetNameInternal {
 }
 
 impl<'de> serde::de::Deserialize<'de> for AssetNameInternal {
+    /// `'de` 是反序列化的生命周期，表示原始 JSON 字符串流的有效期。
+    /// ### 泛型参数：
+    /// * `D`: 反序列化器（如 JSON 或 MessagePack 格式的处理器）。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::de::Deserializer<'de>,
     {
-        // let name = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        // 首先将数据解析为通用的 Cow (Copy-on-write) 字符串，这样对于某些数据可以直接引用原始缓冲区。
         let name =
             <std::borrow::Cow<'de, str> as serde::Deserialize<'de>>::deserialize(deserializer)?;
         Ok(AssetNameInternal::new(name))

@@ -4,7 +4,7 @@
 //! 涵盖了名义价值检查、市价单偏离度检查等常见的风控场景。
 
 use barter::{
- // Sands
+    // Sands
     EngineEvent,
     engine::{
         clock::LiveClock,
